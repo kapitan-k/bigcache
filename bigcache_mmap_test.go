@@ -2,17 +2,39 @@ package bigcache
 
 import (
 	"fmt"
+	"io/ioutil"
+	//"os"
+	. "github.com/kapitan-k/bigcache/buffer"
+	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
 )
 
-func TestWriteAndGetOnCache(t *testing.T) {
-	t.Parallel()
+var mmapBufferCreator *SeqentialMmapFileBufferCreator
 
+func TestSeqentialMmapFileBufferCreatorNew(t *testing.T) {
+	var err error
+	var buffer Buffer
+	var tmpDirName string
+	tmpDirName, err = ioutil.TempDir("", "iox")
+	assert.NoError(t, err)
+
+	mmapBufferCreator = NewSeqentialMmapFileBufferCreator(tmpDirName)
+	buffer, err = mmapBufferCreator.NewBuffer(1024 * 1024)
+	// then
+	assert.NoError(t, err)
+	assert.NotNil(t, buffer)
+
+	err = buffer.Close()
+	assert.NoError(t, err)
+}
+
+func TestMmapWriteAndGetOnCache(t *testing.T) {
+
+	c := DefaultConfig(5 * time.Second)
+	c.BufferCreator = mmapBufferCreator
 	// given
-	cache, _ := NewBigCache(DefaultConfig(5 * time.Second))
+	cache, _ := NewBigCache(c)
 	value := []byte("value")
 
 	// when
@@ -24,8 +46,7 @@ func TestWriteAndGetOnCache(t *testing.T) {
 	assert.Equal(t, value, cachedValue)
 }
 
-func TestConstructCacheWithDefaultHasher(t *testing.T) {
-	t.Parallel()
+func TestMmapConstructCacheWithDefaultHasher(t *testing.T) {
 
 	// given
 	cache, _ := NewBigCache(Config{
@@ -33,13 +54,13 @@ func TestConstructCacheWithDefaultHasher(t *testing.T) {
 		LifeWindow:         5 * time.Second,
 		MaxEntriesInWindow: 10,
 		MaxEntrySize:       256,
+		BufferCreator:      mmapBufferCreator,
 	})
 
 	assert.IsType(t, fnv64a{}, cache.hash)
 }
 
-func TestWillReturnErrorOnInvalidNumberOfPartitions(t *testing.T) {
-	t.Parallel()
+func TestMmapWillReturnErrorOnInvalidNumberOfPartitions(t *testing.T) {
 
 	// given
 	cache, error := NewBigCache(Config{
@@ -47,14 +68,14 @@ func TestWillReturnErrorOnInvalidNumberOfPartitions(t *testing.T) {
 		LifeWindow:         5 * time.Second,
 		MaxEntriesInWindow: 10,
 		MaxEntrySize:       256,
+		BufferCreator:      mmapBufferCreator,
 	})
 
 	assert.Nil(t, cache)
 	assert.Error(t, error, "Shards number must be power of two")
 }
 
-func TestEntryNotFound(t *testing.T) {
-	t.Parallel()
+func TestMmapEntryNotFound(t *testing.T) {
 
 	// given
 	cache, _ := NewBigCache(Config{
@@ -62,6 +83,7 @@ func TestEntryNotFound(t *testing.T) {
 		LifeWindow:         5 * time.Second,
 		MaxEntriesInWindow: 10,
 		MaxEntrySize:       256,
+		BufferCreator:      mmapBufferCreator,
 	})
 
 	// when
@@ -71,8 +93,7 @@ func TestEntryNotFound(t *testing.T) {
 	assert.EqualError(t, err, "Entry \"nonExistingKey\" not found")
 }
 
-func TestTimingEviction(t *testing.T) {
-	t.Parallel()
+func TestMmapTimingEviction(t *testing.T) {
 
 	// given
 	clock := mockedClock{value: 0}
@@ -81,6 +102,7 @@ func TestTimingEviction(t *testing.T) {
 		LifeWindow:         time.Second,
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       256,
+		BufferCreator:      mmapBufferCreator,
 	}, &clock)
 
 	// when
@@ -93,8 +115,7 @@ func TestTimingEviction(t *testing.T) {
 	assert.EqualError(t, err, "Entry \"key\" not found")
 }
 
-func TestTimingEvictionShouldEvictOnlyFromUpdatedShard(t *testing.T) {
-	t.Parallel()
+func TestMmapTimingEvictionShouldEvictOnlyFromUpdatedShard(t *testing.T) {
 
 	// given
 	clock := mockedClock{value: 0}
@@ -103,6 +124,7 @@ func TestTimingEvictionShouldEvictOnlyFromUpdatedShard(t *testing.T) {
 		LifeWindow:         time.Second,
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       256,
+		BufferCreator:      mmapBufferCreator,
 	}, &clock)
 
 	// when
@@ -116,8 +138,7 @@ func TestTimingEvictionShouldEvictOnlyFromUpdatedShard(t *testing.T) {
 	assert.Equal(t, []byte("value"), value)
 }
 
-func TestCleanShouldEvictAll(t *testing.T) {
-	t.Parallel()
+func TestMmapCleanShouldEvictAll(t *testing.T) {
 
 	// given
 	cache, _ := NewBigCache(Config{
@@ -126,6 +147,7 @@ func TestCleanShouldEvictAll(t *testing.T) {
 		CleanWindow:        time.Second,
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       256,
+		BufferCreator:      mmapBufferCreator,
 	})
 
 	// when
@@ -138,8 +160,7 @@ func TestCleanShouldEvictAll(t *testing.T) {
 	assert.Equal(t, value, []byte(nil))
 }
 
-func TestOnRemoveCallback(t *testing.T) {
-	t.Parallel()
+func TestMmapOnRemoveCallback(t *testing.T) {
 
 	// given
 	clock := mockedClock{value: 0}
@@ -155,6 +176,7 @@ func TestOnRemoveCallback(t *testing.T) {
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       256,
 		OnRemove:           onRemove,
+		BufferCreator:      mmapBufferCreator,
 	}, &clock)
 
 	// when
@@ -166,8 +188,7 @@ func TestOnRemoveCallback(t *testing.T) {
 	assert.True(t, onRemoveInvoked)
 }
 
-func TestCacheLen(t *testing.T) {
-	t.Parallel()
+func TestMmapCacheLen(t *testing.T) {
 
 	// given
 	cache, _ := NewBigCache(Config{
@@ -175,6 +196,7 @@ func TestCacheLen(t *testing.T) {
 		LifeWindow:         time.Second,
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       256,
+		BufferCreator:      mmapBufferCreator,
 	})
 	keys := 1337
 	// when
@@ -187,8 +209,7 @@ func TestCacheLen(t *testing.T) {
 	assert.Equal(t, keys, cache.Len())
 }
 
-func TestCacheReset(t *testing.T) {
-	t.Parallel()
+func TestMmapCacheReset(t *testing.T) {
 
 	// given
 	cache, _ := NewBigCache(Config{
@@ -196,6 +217,7 @@ func TestCacheReset(t *testing.T) {
 		LifeWindow:         time.Second,
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       256,
+		BufferCreator:      mmapBufferCreator,
 	})
 	keys := 1337
 
@@ -222,8 +244,7 @@ func TestCacheReset(t *testing.T) {
 	assert.Equal(t, keys, cache.Len())
 }
 
-func TestIterateOnResetCache(t *testing.T) {
-	t.Parallel()
+func TestMmapIterateOnResetCache(t *testing.T) {
 
 	// given
 	cache, _ := NewBigCache(Config{
@@ -231,6 +252,7 @@ func TestIterateOnResetCache(t *testing.T) {
 		LifeWindow:         time.Second,
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       256,
+		BufferCreator:      mmapBufferCreator,
 	})
 	keys := 1337
 
@@ -246,8 +268,7 @@ func TestIterateOnResetCache(t *testing.T) {
 	assert.Equal(t, false, iterator.SetNext())
 }
 
-func TestGetOnResetCache(t *testing.T) {
-	t.Parallel()
+func TestMmapGetOnResetCache(t *testing.T) {
 
 	// given
 	cache, _ := NewBigCache(Config{
@@ -255,6 +276,7 @@ func TestGetOnResetCache(t *testing.T) {
 		LifeWindow:         time.Second,
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       256,
+		BufferCreator:      mmapBufferCreator,
 	})
 	keys := 1337
 
@@ -272,8 +294,7 @@ func TestGetOnResetCache(t *testing.T) {
 	assert.Equal(t, value, []byte(nil))
 }
 
-func TestEntryUpdate(t *testing.T) {
-	t.Parallel()
+func TestMmapEntryUpdate(t *testing.T) {
 
 	// given
 	clock := mockedClock{value: 0}
@@ -282,6 +303,7 @@ func TestEntryUpdate(t *testing.T) {
 		LifeWindow:         6 * time.Second,
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       256,
+		BufferCreator:      mmapBufferCreator,
 	}, &clock)
 
 	// when
@@ -296,8 +318,7 @@ func TestEntryUpdate(t *testing.T) {
 	assert.Equal(t, []byte("value2"), cachedValue)
 }
 
-func TestOldestEntryDeletionWhenMaxCacheSizeIsReached(t *testing.T) {
-	t.Parallel()
+func TestMmapOldestEntryDeletionWhenMaxCacheSizeIsReached(t *testing.T) {
 
 	// given
 	cache, _ := NewBigCache(Config{
@@ -306,6 +327,7 @@ func TestOldestEntryDeletionWhenMaxCacheSizeIsReached(t *testing.T) {
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       1,
 		HardMaxCacheSize:   1,
+		BufferCreator:      mmapBufferCreator,
 	})
 
 	// when
@@ -323,8 +345,7 @@ func TestOldestEntryDeletionWhenMaxCacheSizeIsReached(t *testing.T) {
 	assert.Equal(t, blob('c', 1024*800), entry3)
 }
 
-func TestRetrievingEntryShouldCopy(t *testing.T) {
-	t.Parallel()
+func TestMmapRetrievingEntryShouldCopy(t *testing.T) {
 
 	// given
 	cache, _ := NewBigCache(Config{
@@ -333,6 +354,7 @@ func TestRetrievingEntryShouldCopy(t *testing.T) {
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       1,
 		HardMaxCacheSize:   1,
+		BufferCreator:      mmapBufferCreator,
 	})
 	cache.Set("key1", blob('a', 1024*400))
 	value, key1Err := cache.Get("key1")
@@ -349,8 +371,7 @@ func TestRetrievingEntryShouldCopy(t *testing.T) {
 	assert.Equal(t, blob('a', 1024*400), value)
 }
 
-func TestEntryBiggerThanMaxShardSizeError(t *testing.T) {
-	t.Parallel()
+func TestMmapEntryBiggerThanMaxShardSizeError(t *testing.T) {
 
 	// given
 	cache, _ := NewBigCache(Config{
@@ -359,6 +380,7 @@ func TestEntryBiggerThanMaxShardSizeError(t *testing.T) {
 		MaxEntriesInWindow: 1,
 		MaxEntrySize:       1,
 		HardMaxCacheSize:   1,
+		BufferCreator:      mmapBufferCreator,
 	})
 
 	// when
@@ -368,8 +390,7 @@ func TestEntryBiggerThanMaxShardSizeError(t *testing.T) {
 	assert.EqualError(t, err, "Entry is bigger than max shard size.")
 }
 
-func TestHashCollision(t *testing.T) {
-	t.Parallel()
+func TestMmapHashCollision(t *testing.T) {
 
 	ml := &mockedLogger{}
 	// given
@@ -381,6 +402,7 @@ func TestHashCollision(t *testing.T) {
 		Verbose:            true,
 		Hasher:             hashStub(5),
 		Logger:             ml,
+		BufferCreator:      mmapBufferCreator,
 	})
 
 	// when
@@ -407,34 +429,4 @@ func TestHashCollision(t *testing.T) {
 	assert.Nil(t, cachedValue)
 
 	assert.NotEqual(t, "", ml.lastFormat)
-}
-
-type mockedLogger struct {
-	lastFormat string
-	lastArgs   []interface{}
-}
-
-func (ml *mockedLogger) Printf(format string, v ...interface{}) {
-	ml.lastFormat = format
-	ml.lastArgs = v
-}
-
-type mockedClock struct {
-	value int64
-}
-
-func (mc *mockedClock) epoch() int64 {
-	return mc.value
-}
-
-func (mc *mockedClock) set(value int64) {
-	mc.value = value
-}
-
-func blob(char byte, len int) []byte {
-	b := make([]byte, len)
-	for index := range b {
-		b[index] = char
-	}
-	return b
 }

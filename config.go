@@ -1,6 +1,9 @@
 package bigcache
 
-import "time"
+import (
+	"github.com/kapitan-k/bigcache/buffer"
+	"time"
+)
 
 // Config for BigCache
 type Config struct {
@@ -32,6 +35,10 @@ type Config struct {
 	// Logger is a logging interface and used in combination with `Verbose`
 	// Defaults to `DefaultLogger()`
 	Logger Logger
+
+	// BufferCreator is the interface to create a new buffer within a shard
+	// if set to nil, a normal byte slice is created for each shard.
+	BufferCreator buffer.BufferCreator
 }
 
 // DefaultConfig initializes config with default values.
@@ -47,6 +54,7 @@ func DefaultConfig(eviction time.Duration) Config {
 		Hasher:             newDefaultHasher(),
 		HardMaxCacheSize:   0,
 		Logger:             DefaultLogger(),
+		BufferCreator:      &buffer.ByteSliceBufferCreator{},
 	}
 }
 

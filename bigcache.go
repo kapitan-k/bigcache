@@ -3,6 +3,8 @@ package bigcache
 import (
 	"fmt"
 	"time"
+
+	"github.com/kapitan-k/bigcache/buffer"
 )
 
 const (
@@ -27,7 +29,7 @@ func NewBigCache(config Config) (*BigCache, error) {
 	return newBigCache(config, &systemClock{})
 }
 
-func newBigCache(config Config, clock clock) (*BigCache, error) {
+func newBigCache(config Config, clock clock) (cache *BigCache, err error) {
 
 	if !isPowerOfTwo(config.Shards) {
 		return nil, fmt.Errorf("Shards number must be power of two")
@@ -37,7 +39,11 @@ func newBigCache(config Config, clock clock) (*BigCache, error) {
 		config.Hasher = newDefaultHasher()
 	}
 
-	cache := &BigCache{
+	if config.BufferCreator == nil {
+		config.BufferCreator = &buffer.ByteSliceBufferCreator{}
+	}
+
+	cache = &BigCache{
 		shards:       make([]*cacheShard, config.Shards),
 		lifeWindow:   uint64(config.LifeWindow.Seconds()),
 		clock:        clock,
@@ -55,7 +61,12 @@ func newBigCache(config Config, clock clock) (*BigCache, error) {
 	}
 
 	for i := 0; i < config.Shards; i++ {
-		cache.shards[i] = initNewShard(config, onRemove, clock)
+		var cacheShard *cacheShard
+		cacheShard, err = initNewShard(config, onRemove, clock)
+		if err != nil {
+			return
+		}
+		cache.shards[i] = cacheShard
 	}
 
 	if config.CleanWindow > 0 {
@@ -105,20 +116,6 @@ func (c *BigCache) Len() int {
 		len += shard.len()
 	}
 	return len
-}
-
-// Stats returns cache's statistics
-func (c *BigCache) Stats() Stats {
-	var s Stats
-	for _, shard := range c.shards {
-		tmp := shard.getStats()
-		s.Hits += tmp.Hits
-		s.Misses += tmp.Misses
-		s.DelHits += tmp.DelHits
-		s.DelMisses += tmp.DelMisses
-		s.Collisions += tmp.Collisions
-	}
-	return s
 }
 
 // Iterator returns iterator function to iterate over EntryInfo's from whole cache.

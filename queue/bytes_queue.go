@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"log"
 	"time"
+
+	. "github.com/kapitan-k/bigcache/buffer"
 )
 
 const (
@@ -19,7 +21,8 @@ const (
 // BytesQueue is a non-thread safe queue type of fifo based on bytes array.
 // For every push operation index of entry is returned. It can be used to read the entry later
 type BytesQueue struct {
-	array           []byte
+	buffer Buffer
+
 	capacity        int
 	maxCapacity     int
 	head            int
@@ -38,9 +41,10 @@ type queueError struct {
 // NewBytesQueue initialize new bytes queue.
 // Initial capacity is used in bytes array allocation
 // When verbose flag is set then information about memory allocation are printed
-func NewBytesQueue(initialCapacity int, maxCapacity int, verbose bool) *BytesQueue {
+func NewBytesQueue(buffer Buffer, initialCapacity int, maxCapacity int, verbose bool) *BytesQueue {
 	return &BytesQueue{
-		array:           make([]byte, initialCapacity),
+		buffer: buffer,
+		//array:           make([]byte, initialCapacity),
 		capacity:        initialCapacity,
 		maxCapacity:     maxCapacity,
 		headerBuffer:    make([]byte, headerEntrySize),
@@ -63,7 +67,7 @@ func (q *BytesQueue) Reset() {
 
 // Push copies entry at the end of queue and moves tail pointer. Allocates more space if needed.
 // Returns index for pushed data or error if maximum size queue limit is reached.
-func (q *BytesQueue) Push(data []byte) (int, error) {
+func (q *BytesQueue) Push(data []byte) (index int, err error) {
 	dataLen := len(data)
 
 	if q.availableSpaceAfterTail() < dataLen+headerEntrySize {
@@ -72,18 +76,21 @@ func (q *BytesQueue) Push(data []byte) (int, error) {
 		} else if q.capacity+headerEntrySize+dataLen >= q.maxCapacity && q.maxCapacity > 0 {
 			return -1, &queueError{"Full queue. Maximum size limit reached."}
 		} else {
-			q.allocateAdditionalMemory(dataLen + headerEntrySize)
+			err = q.allocateAdditionalMemory(dataLen + headerEntrySize)
+			if err != nil {
+				return -1, &queueError{"Queue cannot allocate more memory."}
+			}
 		}
 	}
 
-	index := q.tail
+	index = q.tail
 
 	q.push(data, dataLen)
 
 	return index, nil
 }
 
-func (q *BytesQueue) allocateAdditionalMemory(minimum int) {
+func (q *BytesQueue) allocateAdditionalMemory(minimum int) (err error) {
 	start := time.Now()
 	if q.capacity < minimum {
 		q.capacity += minimum
@@ -93,11 +100,14 @@ func (q *BytesQueue) allocateAdditionalMemory(minimum int) {
 		q.capacity = q.maxCapacity
 	}
 
-	oldArray := q.array
-	q.array = make([]byte, q.capacity)
+	var newData, oldData []byte
+	newData, oldData, err = q.buffer.Enlarge(q.capacity)
+	if err != nil {
+		return
+	}
 
 	if leftMarginIndex != q.rightMargin {
-		copy(q.array, oldArray[:q.rightMargin])
+		copy(newData, oldData[:q.rightMargin])
 
 		if q.tail < q.head {
 			emptyBlobLen := q.head - q.tail - headerEntrySize
@@ -110,6 +120,8 @@ func (q *BytesQueue) allocateAdditionalMemory(minimum int) {
 	if q.verbose {
 		log.Printf("Allocated new queue in %s; Capacity: %d \n", time.Since(start), q.capacity)
 	}
+
+	return
 }
 
 func (q *BytesQueue) push(data []byte, len int) {
@@ -126,7 +138,7 @@ func (q *BytesQueue) push(data []byte, len int) {
 }
 
 func (q *BytesQueue) copy(data []byte, len int) {
-	q.tail += copy(q.array[q.tail:], data[:len])
+	q.tail += copy(q.buffer.Bytes()[q.tail:], data[:len])
 }
 
 // Pop reads the oldest entry from queue and moves head pointer to the next one
@@ -187,12 +199,13 @@ func (q *BytesQueue) peek(index int) ([]byte, int, error) {
 		return nil, 0, &queueError{"Index must be grater than zero. Invalid index."}
 	}
 
-	if index+headerEntrySize >= len(q.array) {
+	array := q.buffer.Bytes()
+	if index+headerEntrySize >= len(array) {
 		return nil, 0, &queueError{"Index out of range"}
 	}
 
-	blockSize := int(binary.LittleEndian.Uint32(q.array[index : index+headerEntrySize]))
-	return q.array[index+headerEntrySize : index+headerEntrySize+blockSize], blockSize, nil
+	blockSize := int(binary.LittleEndian.Uint32(array[index : index+headerEntrySize]))
+	return array[index+headerEntrySize : index+headerEntrySize+blockSize], blockSize, nil
 }
 
 func (q *BytesQueue) availableSpaceAfterTail() int {

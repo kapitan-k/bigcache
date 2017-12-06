@@ -3,9 +3,9 @@ package bigcache
 import (
 	"fmt"
 	"sync"
-	"sync/atomic"
 
-	"github.com/allegro/bigcache/queue"
+	"github.com/kapitan-k/bigcache/buffer"
+	"github.com/kapitan-k/bigcache/queue"
 )
 
 type cacheShard struct {
@@ -19,8 +19,6 @@ type cacheShard struct {
 	logger     Logger
 	clock      clock
 	lifeWindow uint64
-
-	stats Stats
 }
 
 type onRemoveCallback func(wrappedEntry []byte)
@@ -31,14 +29,12 @@ func (s *cacheShard) get(key string, hashedKey uint64) ([]byte, error) {
 
 	if itemIndex == 0 {
 		s.lock.RUnlock()
-		s.miss()
 		return nil, notFound(key)
 	}
 
 	wrappedEntry, err := s.entries.Get(int(itemIndex))
 	if err != nil {
 		s.lock.RUnlock()
-		s.miss()
 		return nil, err
 	}
 	if entryKey := readKeyFromEntry(wrappedEntry); key != entryKey {
@@ -46,11 +42,9 @@ func (s *cacheShard) get(key string, hashedKey uint64) ([]byte, error) {
 			s.logger.Printf("Collision detected. Both %q and %q have the same hash %x", key, entryKey, hashedKey)
 		}
 		s.lock.RUnlock()
-		s.collision()
 		return nil, notFound(key)
 	}
 	s.lock.RUnlock()
-	s.hit()
 	return readEntry(wrappedEntry), nil
 }
 
@@ -76,10 +70,9 @@ func (s *cacheShard) set(key string, hashedKey uint64, entry []byte) error {
 			s.hashmap[hashedKey] = uint32(index)
 			s.lock.Unlock()
 			return nil
-		}
-		if s.removeOldestEntry() != nil {
+		} else if s.removeOldestEntry() != nil {
 			s.lock.Unlock()
-			return fmt.Errorf("entry is bigger than max shard size")
+			return fmt.Errorf("Entry is bigger than max shard size.")
 		}
 	}
 }
@@ -90,14 +83,12 @@ func (s *cacheShard) del(key string, hashedKey uint64) error {
 
 	if itemIndex == 0 {
 		s.lock.RUnlock()
-		s.delmiss()
 		return notFound(key)
 	}
 
 	wrappedEntry, err := s.entries.Get(int(itemIndex))
 	if err != nil {
 		s.lock.RUnlock()
-		s.delmiss()
 		return err
 	}
 
@@ -105,7 +96,6 @@ func (s *cacheShard) del(key string, hashedKey uint64) error {
 	s.onRemove(wrappedEntry)
 	resetKeyFromEntry(wrappedEntry)
 	s.lock.RUnlock()
-	s.delhit()
 	return nil
 }
 
@@ -178,34 +168,20 @@ func (s *cacheShard) len() int {
 	return res
 }
 
-func (s *cacheShard) getStats() Stats {
-	return s.stats
-}
+func initNewShard(config Config, callback onRemoveCallback, clock clock) (cs *cacheShard, err error) {
+	var pentries *queue.BytesQueue
+	var buffer buffer.Buffer
+	initialSize := config.initialShardSize() * config.MaxEntrySize
+	buffer, err = config.BufferCreator.NewBuffer(initialSize)
+	if err != nil {
+		return
+	}
 
-func (s *cacheShard) hit() {
-	atomic.AddInt64(&s.stats.Hits, 1)
-}
+	pentries = queue.NewBytesQueue(buffer, initialSize, config.maximumShardSize(), config.Verbose)
 
-func (s *cacheShard) miss() {
-	atomic.AddInt64(&s.stats.Misses, 1)
-}
-
-func (s *cacheShard) delhit() {
-	atomic.AddInt64(&s.stats.DelHits, 1)
-}
-
-func (s *cacheShard) delmiss() {
-	atomic.AddInt64(&s.stats.DelMisses, 1)
-}
-
-func (s *cacheShard) collision() {
-	atomic.AddInt64(&s.stats.Collisions, 1)
-}
-
-func initNewShard(config Config, callback onRemoveCallback, clock clock) *cacheShard {
-	return &cacheShard{
+	cs = &cacheShard{
 		hashmap:     make(map[uint64]uint32, config.initialShardSize()),
-		entries:     *queue.NewBytesQueue(config.initialShardSize()*config.MaxEntrySize, config.maximumShardSize(), config.Verbose),
+		entries:     *pentries,
 		entryBuffer: make([]byte, config.MaxEntrySize+headersSizeInBytes),
 		onRemove:    callback,
 
@@ -214,4 +190,6 @@ func initNewShard(config Config, callback onRemoveCallback, clock clock) *cacheS
 		clock:      clock,
 		lifeWindow: uint64(config.LifeWindow.Seconds()),
 	}
+
+	return
 }
